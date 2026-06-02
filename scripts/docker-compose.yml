@@ -1,0 +1,38 @@
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile
+    image: alert-ops:latest
+    container_name: alert-ops-app
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+      - MYSQL_HOST=mysql
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: alert_app
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
