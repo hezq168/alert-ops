@@ -1,6 +1,8 @@
 package service
 
 import (
+	"alert-ops/internal/model"
+	"alert-ops/internal/repo"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -12,65 +14,32 @@ import (
 )
 
 // ============================================
-// AI 服务接口（预留 CodeBuddy + 其他 AI 提供商扩展）
+// AI 分析：查数据库 → 有则调用，没有则直接报错
 // ============================================
 
-// AIProvider AI 提供商接口
-type AIProvider interface {
-	Analyze(alertSummary, alertDescription, customPrompt string) (string, error)
-	Name() string
-}
-
-// AIService AI 分析服务接口
-type AIService interface {
-	Analyze(summary, description, customPrompt string) (string, error)
-	SetProvider(p AIProvider)
-}
-
-type aiService struct {
-	provider AIProvider
-}
-
-// NewAIService 根据配置创建 AI 服务
-// provider: "openai" → OpenAICompatibleProvider（阿里百炼等兼容 OpenAI API）
-//
-//	"codebuddy" → CodeBuddyProvider
-func NewAIService(provider, apiKey, baseURL, model string) AIService {
-	var p AIProvider
-	switch provider {
-	case "openai":
-		p = &OpenAICompatibleProvider{
-			APIKey:    apiKey,
-			BaseURL:   baseURL,
-			ModelName: model,
-		}
-		zap.L().Info("AI服务初始化",
-			zap.String("provider", "openai"),
-			zap.String("base_url", baseURL),
-			zap.String("model", model),
+// AnalyzeWithFallback 调用 AI 分析告警
+func AnalyzeWithFallback(alertName, severity, instance string, labels map[string]string, summary, description, customPrompt string) (string, error) {
+	var cfg model.AIConfig
+	if err := repo.DB.First(&cfg).Error; err == nil && cfg.Provider != "" && cfg.APIKey != "" {
+		p := createProvider(cfg.Provider, cfg.APIKey, cfg.BaseURL, cfg.Model)
+		zap.L().Info("使用数据库AI配置",
+			zap.String("provider", cfg.Provider),
+			zap.String("model", cfg.Model),
 		)
-	default:
-		// 默认回退到 OpenAI 兼容模式
-		zap.L().Warn("未知AI提供商，回退到 OpenAI 兼容模式",
-			zap.String("configured_provider", provider),
-			zap.String("base_url", baseURL),
-			zap.String("model", model),
-		)
-		p = &OpenAICompatibleProvider{
-			APIKey:    apiKey,
-			BaseURL:   baseURL,
-			ModelName: model,
-		}
+		return p.Analyze(alertName, severity, instance, labels, summary, description, customPrompt)
 	}
-	return &aiService{provider: p}
+
+	zap.L().Error("AI分析失败：数据库未配置AI，请在管理页面配置 AI 参数")
+	return "", fmt.Errorf("AI 未配置，请在管理页面配置 AI 参数")
 }
 
-func (s *aiService) SetProvider(p AIProvider) {
-	s.provider = p
-}
-
-// CreateProvider 根据参数创建 AIProvider（供 handler 热切换使用）
+// CreateProvider 根据参数创建 AIProvider（供 handler 测试连接使用）
 func CreateProvider(provider, apiKey, baseURL, model string) AIProvider {
+	return createProvider(provider, apiKey, baseURL, model)
+}
+
+// createProvider 内部创建 provider
+func createProvider(provider, apiKey, baseURL, model string) AIProvider {
 	switch provider {
 	case "openai":
 		return &OpenAICompatibleProvider{
@@ -90,30 +59,14 @@ func CreateProvider(provider, apiKey, baseURL, model string) AIProvider {
 	}
 }
 
-// Analyze 调用 AI 分析告警
-func (s *aiService) Analyze(summary, description, customPrompt string) (string, error) {
-	if s.provider == nil {
-		zap.L().Error("AI分析失败：未配置AI提供商")
-		return "", fmt.Errorf("未配置AI提供商")
-	}
-	zap.L().Info("开始AI分析",
-		zap.String("provider", s.provider.Name()),
-		zap.Int("summary_len", len(summary)),
-		zap.Int("desc_len", len(description)),
-	)
-	result, err := s.provider.Analyze(summary, description, customPrompt)
-	if err != nil {
-		zap.L().Error("AI分析调用失败",
-			zap.String("provider", s.provider.Name()),
-			zap.Error(err),
-		)
-		return "", err
-	}
-	zap.L().Info("AI分析完成",
-		zap.String("provider", s.provider.Name()),
-		zap.Int("result_len", len(result)),
-	)
-	return result, nil
+// ============================================
+// AI 提供商接口和实现（保持不变）
+// ============================================
+
+// AIProvider AI 提供商接口
+type AIProvider interface {
+	Analyze(alertName, severity, instance string, labels map[string]string, summary, description, customPrompt string) (string, error)
+	Name() string
 }
 
 // ============================================
@@ -131,7 +84,7 @@ func (p *CodeBuddyProvider) Name() string {
 	return "codebuddy"
 }
 
-func (p *CodeBuddyProvider) Analyze(summary, description, customPrompt string) (string, error) {
+func (p *CodeBuddyProvider) Analyze(alertName, severity, instance string, labels map[string]string, summary, description, customPrompt string) (string, error) {
 	if p.APIKey == "" {
 		return "", fmt.Errorf("CodeBuddy AI 未配置 API Key")
 	}
@@ -150,11 +103,7 @@ func (p *CodeBuddyProvider) Analyze(summary, description, customPrompt string) (
 	// 构建提示词
 	prompt := customPrompt
 	if prompt == "" {
-		prompt = fmt.Sprintf(
-			"请分析以下告警信息：\n"+
-				"告警摘要: %s\n告警详情: %s\n\n请用中文回复。给出简洁的根因分析、解决建议、推理指数（200字以内）尽量精简。",
-			summary, description,
-		)
+		prompt = buildAIPrompt(alertName, severity, instance, labels, summary, description)
 	}
 
 	// TODO: 对接 CodeBuddy OAuth2 API，获取 token 后调用 chat completions
@@ -178,14 +127,14 @@ func (p *OpenAICompatibleProvider) Name() string {
 	return "openai-compatible"
 }
 
-func (p *OpenAICompatibleProvider) Analyze(summary, description, customPrompt string) (string, error) {
+func (p *OpenAICompatibleProvider) Analyze(alertName, severity, instance string, labels map[string]string, summary, description, customPrompt string) (string, error) {
 	if p.client == nil {
 		p.client = &http.Client{Timeout: 30 * time.Second}
 	}
 
 	prompt := customPrompt
 	if prompt == "" {
-		prompt = fmt.Sprintf("分析以下告警并给出建议：\n摘要：%s\n详情：%s", summary, description)
+		prompt = buildAIPrompt(alertName, severity, instance, labels, summary, description)
 	}
 
 	reqBody := map[string]interface{}{
@@ -259,4 +208,17 @@ func (p *OpenAICompatibleProvider) Analyze(summary, description, customPrompt st
 
 	zap.L().Warn("AI返回空choices", zap.String("body", string(respBody)))
 	return "AI未返回有效内容", nil
+}
+
+// buildAIPrompt 构建发送给 AI 的分析提示词
+func buildAIPrompt(alertName, severity, instance string, labels map[string]string, summary, description string) string {
+	labelsStr := ""
+	for k, v := range labels {
+		labelsStr += fmt.Sprintf("%s=%s, ", k, v)
+	}
+	return fmt.Sprintf(
+		"请分析以下告警信息：\n"+
+			"告警名称: %s\n级别: %s\n实例: %s\n标签: %s\n告警摘要: %s\n告警详情: %s\n\n请用中文回复。给出简洁的根因分析、解决建议（200字以内）尽量精简。",
+		alertName, severity, instance, labelsStr, summary, description,
+	)
 }

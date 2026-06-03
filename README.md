@@ -200,7 +200,7 @@ alert-ops/
 ### 11. 告警抑制
 - ✅ 非工作时间告警自动抑制
 - ✅ 定时任务（每 5 分钟）检查并发送
-- ✅ 工作时间可配置（`alert.work_time.start` / `alert.work_time.end`）
+- ✅ 工作时间按规则配置（每条规则独立设置 `work_time_start` / `work_time_end`）
 
 ### 12. 系统功能
 - ✅ 图片验证码（自实现）
@@ -357,15 +357,9 @@ mysql:
 jwt:
   secret: "your-secret-key"   # JWT 签名密钥
   expire: 24                  # Token 过期时间（小时）
-
-alert:
-  ai:
-    # AI 配置已迁移至数据库管理，通过管理界面动态配置，无需修改配置文件
-    # 详见：系统管理 → AI配置 页面
-  work_time:
-    start: "09:00"            # 工作开始时间
-    end: "18:00"              # 工作结束时间
 ```
+
+> **说明**：AI 配置已迁移至数据库管理，通过管理界面动态配置（系统管理 → AI配置），无需在配置文件中设置。工作时间由每条告警规则独立配置。
 
 ---
 
@@ -564,7 +558,7 @@ alert:
 
 | 任务 | 说明 | 频率 |
 |------|------|------|
-| SuppressedSender | 检查并发送被抑制的告警（仅工作时间，通过 `alert.work_time` 配置） | 每 5 分钟 |
+| SuppressedSender | 检查并发送被抑制的告警（仅工作时间，通过每条规则的 `work_time_start/end` 配置） | 每 5 分钟 |
 
 ---
 

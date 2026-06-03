@@ -21,7 +21,6 @@ var ErrNoAlerts = errors.New("no alerts parsed from webhook body")
 type EngineService interface {
 	// 核心引擎
 	ProcessAlert(source *model.AlertSource, alert *adapter.NormalizedAlert) error
-	FlushSuppressedAlerts() error
 	// Webhook 接收
 	ReceiveAlertmanager(slug string, body []byte) error
 	ParseAlertmanagerBody(body io.Reader) (*adapter.AMWebhookPayload, error)
@@ -39,10 +38,9 @@ type engineService struct {
 	suppressedRepo alertRepo.SuppressedAlertRepo
 	templateSvc    TemplateService
 	channelSvc     ChannelService
-	aiSvc          AIService
 }
 
-func NewEngineService(aiSvc AIService) EngineService {
+func NewEngineService() EngineService {
 	return &engineService{
 		sourceRepo:     alertRepo.NewAlertSourceRepo(),
 		ruleRepo:       alertRepo.NewAlertRuleRepo(),
@@ -52,7 +50,6 @@ func NewEngineService(aiSvc AIService) EngineService {
 		suppressedRepo: alertRepo.NewSuppressedAlertRepo(),
 		templateSvc:    NewTemplateService(),
 		channelSvc:     NewChannelService(),
-		aiSvc:          aiSvc,
 	}
 }
 
@@ -325,17 +322,6 @@ func (s *engineService) isWorkTime(rule *model.AlertRule) bool {
 	return currentTime >= rule.WorkTimeStart && currentTime <= rule.WorkTimeEnd
 }
 
-// isAfterWorkStart 判断当前时间是否已过规则的工作开始时间
-// 用于 FlushSuppressedAlerts 场景：补发只需过了开始时间即可，不限制结束时间
-func (s *engineService) isAfterWorkStart(rule *model.AlertRule) bool {
-	if rule.WorkTimeStart == "" || rule.WorkTimeEnd == "" {
-		return true
-	}
-	now := time.Now()
-	currentTime := now.Format("15:04")
-	return currentTime >= rule.WorkTimeStart
-}
-
 func (s *engineService) nextWorkTime(rule *model.AlertRule) time.Time {
 	now := time.Now()
 	startParts := parseTimeStr(rule.WorkTimeStart)
@@ -380,7 +366,7 @@ func (s *engineService) processAIRule(source *model.AlertSource, rule *model.Ale
 	// 只有 firing 状态才调用 AI 分析，恢复不调用AI分析
 	if rule.AIEnabled && alert.Status == "firing" {
 		var err error
-		aiSuggestion, err = s.aiSvc.Analyze(alert.Summary, alert.Description, rule.AIPromptTemplate)
+		aiSuggestion, err = AnalyzeWithFallback(alert.AlertName, alert.Severity, alert.Instance, alert.Labels, alert.Summary, alert.Description, rule.AIPromptTemplate)
 		if err != nil {
 			zap.L().Error("AI分析失败", zap.Error(err))
 			aiSuggestion = fmt.Sprintf("AI分析失败: %v", err)
@@ -495,278 +481,6 @@ func (s *engineService) sendToAllChannels(sourceID uint, title, content string, 
 	} else {
 		record.SendStatus = "failed"
 	}
-}
-
-// suppressedGroup 抑制告警分组（按 RuleID + SourceID）
-type suppressedGroup struct {
-	RuleID   uint
-	SourceID uint
-	Rule     *model.AlertRule
-	Records  []*model.AlertRecord
-	SAIDs    []uint // suppressed_alert IDs
-}
-
-// alertKey 告警去重键（alertname + instance）
-type alertKey struct {
-	AlertName string
-	Instance  string
-}
-
-// alertSummary 去重后的告警摘要
-type alertSummary struct {
-	AlertName string
-	Instance  string
-	Severity  string
-	Count     int
-	FirstTime time.Time
-}
-
-// FlushSuppressedAlerts 发送所有被抑制的告警（定时任务调用）
-// 按 (RuleID, SourceID) 分组，每组构建一张汇总卡片发送
-func (s *engineService) FlushSuppressedAlerts() error {
-	suppressed, err := s.suppressedRepo.GetPending()
-	if err != nil {
-		return fmt.Errorf("获取抑制告警失败: %w", err)
-	}
-
-	if len(suppressed) == 0 {
-		zap.L().Info("无待发送的抑制告警")
-		return nil
-	}
-
-	zap.L().Info("开始发送抑制告警", zap.Int("count", len(suppressed)))
-
-	// 1. 按 (RuleID, SourceID) 分组
-	groups, err := s.groupSuppressedByRule(suppressed)
-	if err != nil {
-		return fmt.Errorf("分组抑制告警失败: %w", err)
-	}
-
-	zap.L().Info("抑制告警分组完成", zap.Int("group_count", len(groups)))
-
-	// 2. 每组发送一张汇总卡片
-	now := time.Now()
-	for _, g := range groups {
-		if err := s.sendSuppressedSummary(&g, now); err != nil {
-			zap.L().Error("发送抑制告警汇总失败",
-				zap.Uint("rule_id", g.RuleID),
-				zap.Uint("source_id", g.SourceID),
-				zap.Error(err),
-			)
-		}
-	}
-
-	return nil
-}
-
-// groupSuppressedByRule 将抑制告警按 (RuleID, SourceID) 分组，组内去重统计
-func (s *engineService) groupSuppressedByRule(suppressed []model.SuppressedAlert) ([]suppressedGroup, error) {
-	type groupKey struct {
-		RuleID   uint
-		SourceID uint
-	}
-
-	groupMap := make(map[groupKey]*suppressedGroup)
-
-	for _, sa := range suppressed {
-		key := groupKey{RuleID: sa.RuleID, SourceID: sa.SourceID}
-
-		g, ok := groupMap[key]
-		if !ok {
-			// 首次出现，获取规则信息
-			rule, err := s.ruleRepo.GetByID(sa.RuleID)
-			if err != nil {
-				zap.L().Error("获取规则失败，跳过该抑制记录",
-					zap.Uint("rule_id", sa.RuleID),
-					zap.Uint("sa_id", sa.ID),
-					zap.Error(err),
-				)
-				continue
-			}
-
-			// 检查当前是否已过规则的工作开始时间，未到则跳过
-			if !s.isAfterWorkStart(rule) {
-				zap.L().Info("当前未到规则的工作开始时间，跳过",
-					zap.Uint("rule_id", rule.ID),
-					zap.String("rule_name", rule.Name),
-					zap.String("work_start", rule.WorkTimeStart),
-					zap.String("work_end", rule.WorkTimeEnd),
-				)
-				continue
-			}
-
-			g = &suppressedGroup{
-				RuleID:   sa.RuleID,
-				SourceID: sa.SourceID,
-				Rule:     rule,
-			}
-			groupMap[key] = g
-		}
-
-		// 获取告警记录
-		record, err := s.recordRepo.GetByID(sa.RecordID)
-		if err != nil {
-			zap.L().Error("获取告警记录失败，跳过",
-				zap.Uint("record_id", sa.RecordID),
-				zap.Error(err),
-			)
-			continue
-		}
-
-		g.Records = append(g.Records, record)
-		g.SAIDs = append(g.SAIDs, sa.ID)
-	}
-
-	var groups []suppressedGroup
-	for _, g := range groupMap {
-		groups = append(groups, *g)
-	}
-
-	return groups, nil
-}
-
-// dedupAndSummarize 对组内告警记录按 (alertname, instance) 去重统计
-func (s *engineService) dedupAndSummarize(records []*model.AlertRecord) []alertSummary {
-	summaryMap := make(map[alertKey]*alertSummary)
-
-	for _, r := range records {
-		key := alertKey{AlertName: r.AlertName, Instance: r.Instance}
-		as, ok := summaryMap[key]
-		if !ok {
-			as = &alertSummary{
-				AlertName: r.AlertName,
-				Instance:  r.Instance,
-				Severity:  r.Severity,
-				Count:     1,
-				FirstTime: r.CreatedAt,
-			}
-			summaryMap[key] = as
-		} else {
-			as.Count++
-			if r.CreatedAt.Before(as.FirstTime) {
-				as.FirstTime = r.CreatedAt
-			}
-		}
-	}
-
-	var result []alertSummary
-	for _, v := range summaryMap {
-		result = append(result, *v)
-	}
-	return result
-}
-
-// sendSuppressedSummary 发送一组抑制告警的汇总卡片
-func (s *engineService) sendSuppressedSummary(g *suppressedGroup, now time.Time) error {
-	// 去重统计
-	summaries := s.dedupAndSummarize(g.Records)
-
-	zap.L().Info("发送抑制告警汇总",
-		zap.Uint("rule_id", g.RuleID),
-		zap.Uint("source_id", g.SourceID),
-		zap.Int("total_records", len(g.Records)),
-		zap.Int("dedup_count", len(summaries)),
-		zap.Int("channel_count", len(g.Rule.Channels)),
-	)
-
-	// 构建汇总标题
-	suppressReason := "非工作时间"
-	if len(g.Records) > 0 {
-		// 从第一个 SuppressedAlert 获取抑制原因
-		sa, _ := s.suppressedRepo.GetByID(g.SAIDs[0])
-		if sa != nil && sa.SuppressReason != "" {
-			suppressReason = sa.SuppressReason
-		}
-	}
-
-	title := fmt.Sprintf("📋 非工作时间告警汇总 - %s", g.Rule.Name)
-
-	// 构建汇总卡片内容
-	content := s.buildSummaryContent(suppressReason, summaries, len(g.Records))
-
-	// 通过规则关联的通道发送
-	allSent := true
-	for _, ch := range g.Rule.Channels {
-		if !ch.Enabled {
-			continue
-		}
-		// 汇总卡片的 severity 取最高级别
-		highestSev := s.getHighestSeverity(summaries)
-		result := s.channelSvc.SendWithRetry(&ch, title, content, "firing", highestSev)
-		if !result.Success {
-			allSent = false
-			zap.L().Error("汇总卡片发送失败",
-				zap.String("channel", ch.Name),
-				zap.String("error", result.Error),
-			)
-		}
-	}
-
-	// 更新所有关联的记录和抑制记录状态
-	if allSent {
-		for _, r := range g.Records {
-			r.SendStatus = "sent"
-			r.SentAt = &now
-			s.recordRepo.Update(r)
-		}
-		for _, id := range g.SAIDs {
-			s.suppressedRepo.UpdateStatus(id, "sent")
-		}
-	}
-
-	return nil
-}
-
-// buildSummaryContent 构建汇总卡片内容
-func (s *engineService) buildSummaryContent(suppressReason string, summaries []alertSummary, totalCount int) string {
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("⏱ **抑制原因**：%s\n", suppressReason))
-	sb.WriteString(fmt.Sprintf("📊 **共收到 %d 条抑制告警**，去重后 %d 条：\n\n", totalCount, len(summaries)))
-
-	for _, as := range summaries {
-		emoji := severityEmojiStr(as.Severity)
-		sb.WriteString(fmt.Sprintf("%s **%s** - %s（触发 %d 次，首次 %s）\n",
-			emoji,
-			as.AlertName,
-			as.Instance,
-			as.Count,
-			as.FirstTime.Format("01-02 15:04"),
-		))
-	}
-
-	sb.WriteString(fmt.Sprintf("\n⏰ 汇总发送时间：%s", time.Now().Format("2006-01-02 15:04:05")))
-
-	return sb.String()
-}
-
-// severityEmojiStr 告警级别对应的 emoji
-func severityEmojiStr(severity string) string {
-	switch strings.ToLower(severity) {
-	case "critical":
-		return "🔴"
-	case "warning":
-		return "🟡"
-	case "info":
-		return "🔵"
-	default:
-		return "🟢"
-	}
-}
-
-// getHighestSeverity 获取最高告警级别
-func (s *engineService) getHighestSeverity(summaries []alertSummary) string {
-	severityOrder := map[string]int{"critical": 3, "warning": 2, "info": 1}
-	highest := "info"
-	highestLevel := 0
-	for _, as := range summaries {
-		level, ok := severityOrder[strings.ToLower(as.Severity)]
-		if ok && level > highestLevel {
-			highestLevel = level
-			highest = as.Severity
-		}
-	}
-	return highest
 }
 
 // ============================================

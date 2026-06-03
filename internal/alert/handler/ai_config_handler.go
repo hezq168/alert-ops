@@ -11,12 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
-type AIConfigHandler struct {
-	aiService service.AIService
-}
+type AIConfigHandler struct{}
 
-func NewAIConfigHandler(aiSvc service.AIService) *AIConfigHandler {
-	return &AIConfigHandler{aiService: aiSvc}
+func NewAIConfigHandler() *AIConfigHandler {
+	return &AIConfigHandler{}
 }
 
 // GetConfig 获取当前 AI 配置
@@ -46,7 +44,7 @@ func (h *AIConfigHandler) GetConfig(c *gin.Context) {
 	response.Success(c, displayCfg)
 }
 
-// UpdateConfig 更新 AI 配置并热切换 provider
+// UpdateConfig 更新 AI 配置
 // @Summary 更新AI配置
 // @Tags AI配置
 // @Accept json
@@ -111,21 +109,11 @@ func (h *AIConfigHandler) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	// 热切换 provider（用真实 API Key）
-	realAPIKey := input.APIKey
-	if strings.Contains(realAPIKey, "****") {
-		realAPIKey = cfg.APIKey
-	}
-	newProvider := service.CreateProvider(input.Provider, realAPIKey, input.BaseURL, input.Model)
-	if newProvider != nil {
-		h.aiService.SetProvider(newProvider)
-		zap.L().Info("AI provider 热切换成功",
-			zap.String("provider", input.Provider),
-			zap.String("model", input.Model),
-		)
-	} else {
-		zap.L().Warn("AI provider 创建失败，未切换", zap.String("provider", input.Provider))
-	}
+	// 配置已保存到数据库，下次调用 AI 时会自动使用新配置
+	zap.L().Info("AI配置已更新",
+		zap.String("provider", input.Provider),
+		zap.String("model", input.Model),
+	)
 
 	response.SuccessWithMessage(c, "AI配置已更新并生效", nil)
 }
@@ -156,7 +144,7 @@ func (h *AIConfigHandler) TestConnection(c *gin.Context) {
 		return
 	}
 
-	result, err := p.Analyze("ping", "", "请回复pong")
+	result, err := p.Analyze("test", "info", "", nil, "ping", "pong", "请回复pong")
 	if err != nil {
 		zap.L().Error("AI连接测试失败",
 			zap.String("provider", cfg.Provider),

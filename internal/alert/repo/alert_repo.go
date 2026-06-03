@@ -2,7 +2,7 @@ package repo
 
 import (
 	"alert-ops/internal/model"
-	dbRepo "alert-ops/internal/repo"
+	Repo "alert-ops/internal/repo"
 	"errors"
 
 	"gorm.io/gorm"
@@ -21,22 +21,21 @@ type AlertSourceRepo interface {
 }
 
 type alertSourceRepo struct {
-	db *gorm.DB
 }
 
 func NewAlertSourceRepo() AlertSourceRepo {
-	return &alertSourceRepo{db: dbRepo.DB}
+	return &alertSourceRepo{}
 }
 
 // Create 创建告警源
 func (r *alertSourceRepo) Create(s *model.AlertSource) error {
-	return r.db.Create(s).Error
+	return Repo.DB.Create(s).Error
 }
 
 // GetByID 根据ID获取告警源
 func (r *alertSourceRepo) GetByID(id uint) (*model.AlertSource, error) {
 	var s model.AlertSource
-	err := r.db.First(&s, id).Error
+	err := Repo.DB.First(&s, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -49,7 +48,7 @@ func (r *alertSourceRepo) GetByID(id uint) (*model.AlertSource, error) {
 // GetBySlug 根据slug获取告警源
 func (r *alertSourceRepo) GetBySlug(slug string) (*model.AlertSource, error) {
 	var s model.AlertSource
-	err := r.db.Where("slug = ?", slug).First(&s).Error
+	err := Repo.DB.Where("slug = ?", slug).First(&s).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -63,7 +62,7 @@ func (r *alertSourceRepo) GetBySlug(slug string) (*model.AlertSource, error) {
 func (r *alertSourceRepo) List(page, pageSize int) ([]model.AlertSource, int64, error) {
 	var list []model.AlertSource
 	var total int64
-	db := r.db.Model(&model.AlertSource{})
+	db := Repo.DB.Model(&model.AlertSource{})
 	db.Count(&total)
 	err := db.Offset((page - 1) * pageSize).Limit(pageSize).Order("id DESC").Find(&list).Error
 	return list, total, err
@@ -71,7 +70,7 @@ func (r *alertSourceRepo) List(page, pageSize int) ([]model.AlertSource, int64, 
 
 // Update 更新告警源（使用 Updates + map，避免 GORM Save 的零值陷阱）
 func (r *alertSourceRepo) Update(s *model.AlertSource) error {
-	return r.db.Model(&model.AlertSource{}).Where("id = ?", s.ID).Updates(map[string]interface{}{
+	return Repo.DB.Model(&model.AlertSource{}).Where("id = ?", s.ID).Updates(map[string]interface{}{
 		"name":           s.Name,
 		"slug":           s.Slug,
 		"type":           s.Type,
@@ -84,7 +83,7 @@ func (r *alertSourceRepo) Update(s *model.AlertSource) error {
 
 // Delete 删除告警源
 func (r *alertSourceRepo) Delete(id uint) error {
-	return r.db.Delete(&model.AlertSource{}, id).Error
+	return Repo.DB.Delete(&model.AlertSource{}, id).Error
 }
 
 // ============================================
@@ -100,29 +99,28 @@ type AlertRuleRepo interface {
 }
 
 type alertRuleRepo struct {
-	db *gorm.DB
 }
 
 func NewAlertRuleRepo() AlertRuleRepo {
-	return &alertRuleRepo{db: dbRepo.DB}
+	return &alertRuleRepo{}
 }
 
 // Create 创建规则
 func (r *alertRuleRepo) Create(rule *model.AlertRule) error {
-	return r.db.Create(rule).Error
+	return Repo.DB.Create(rule).Error
 }
 
 // GetByID 根据ID获取规则
 func (r *alertRuleRepo) GetByID(id uint) (*model.AlertRule, error) {
 	var rule model.AlertRule
-	err := r.db.Preload("Channels").Preload("Template").First(&rule, id).Error
+	err := Repo.DB.Preload("Channels").Preload("Template").First(&rule, id).Error
 	return &rule, err
 }
 
 // ListBySource 根据告警源ID获取规则列表
 func (r *alertRuleRepo) ListBySource(sourceID uint) ([]model.AlertRule, error) {
 	var rules []model.AlertRule
-	err := r.db.Where("source_id = ?", sourceID).
+	err := Repo.DB.Where("source_id = ?", sourceID).
 		Preload("Channels").Preload("Template").
 		Order("priority DESC, id ASC").Find(&rules).Error
 	return rules, err
@@ -140,7 +138,7 @@ func (r *alertRuleRepo) Update(rule *model.AlertRule) error {
 		we = we[:10]
 	}
 
-	return r.db.Model(&model.AlertRule{}).Where("id = ?", rule.ID).Updates(map[string]interface{}{
+	return Repo.DB.Model(&model.AlertRule{}).Where("id = ?", rule.ID).Updates(map[string]interface{}{
 		"source_id":          rule.SourceID,
 		"name":               rule.Name,
 		"description":        rule.Description,
@@ -159,12 +157,12 @@ func (r *alertRuleRepo) Update(rule *model.AlertRule) error {
 
 // Delete 删除规则
 func (r *alertRuleRepo) Delete(id uint) error {
-	return r.db.Delete(&model.AlertRule{}, id).Error
+	return Repo.DB.Delete(&model.AlertRule{}, id).Error
 }
 
 // SetChannels 设置规则关联的通道
 func (r *alertRuleRepo) SetChannels(ruleID uint, channelIDs []uint) error {
-	tx := r.db.Begin()
+	tx := Repo.DB.Begin()
 	// 清除旧关联
 	if err := tx.Where("rule_id = ?", ruleID).Delete(&model.RuleChannel{}).Error; err != nil {
 		tx.Rollback()
@@ -192,35 +190,34 @@ type AlertTemplateRepo interface {
 }
 
 type alertTemplateRepo struct {
-	db *gorm.DB
 }
 
 func NewAlertTemplateRepo() AlertTemplateRepo {
-	return &alertTemplateRepo{db: dbRepo.DB}
+	return &alertTemplateRepo{}
 }
 
 // Create 创建模板
 func (r *alertTemplateRepo) Create(t *model.AlertTemplate) error {
-	return r.db.Create(t).Error
+	return Repo.DB.Create(t).Error
 }
 
 // GetByID 根据ID获取模板
 func (r *alertTemplateRepo) GetByID(id uint) (*model.AlertTemplate, error) {
 	var t model.AlertTemplate
-	err := r.db.First(&t, id).Error
+	err := Repo.DB.First(&t, id).Error
 	return &t, err
 }
 
 // ListBySource 根据告警源ID获取模板列表
 func (r *alertTemplateRepo) ListBySource(sourceID uint) ([]model.AlertTemplate, error) {
 	var list []model.AlertTemplate
-	err := r.db.Where("source_id = ?", sourceID).Order("id DESC").Find(&list).Error
+	err := Repo.DB.Where("source_id = ?", sourceID).Order("id DESC").Find(&list).Error
 	return list, err
 }
 
 // Update 更新模板（使用 Updates + map，避免 GORM Save 的零值陷阱）
 func (r *alertTemplateRepo) Update(t *model.AlertTemplate) error {
-	return r.db.Model(&model.AlertTemplate{}).Where("id = ?", t.ID).Updates(map[string]interface{}{
+	return Repo.DB.Model(&model.AlertTemplate{}).Where("id = ?", t.ID).Updates(map[string]interface{}{
 		"source_id":    t.SourceID,
 		"name":         t.Name,
 		"channel_type": t.ChannelType,
@@ -233,7 +230,7 @@ func (r *alertTemplateRepo) Update(t *model.AlertTemplate) error {
 
 // Delete 删除模板
 func (r *alertTemplateRepo) Delete(id uint) error {
-	return r.db.Delete(&model.AlertTemplate{}, id).Error
+	return Repo.DB.Delete(&model.AlertTemplate{}, id).Error
 }
 
 // ============================================
@@ -248,29 +245,28 @@ type AlertChannelRepo interface {
 }
 
 type alertChannelRepo struct {
-	db *gorm.DB
 }
 
 func NewAlertChannelRepo() AlertChannelRepo {
-	return &alertChannelRepo{db: dbRepo.DB}
+	return &alertChannelRepo{}
 }
 
 // Create 创建通道
 func (r *alertChannelRepo) Create(ch *model.AlertChannel) error {
-	return r.db.Create(ch).Error
+	return Repo.DB.Create(ch).Error
 }
 
 // GetByID 根据ID获取通道
 func (r *alertChannelRepo) GetByID(id uint) (*model.AlertChannel, error) {
 	var ch model.AlertChannel
-	err := r.db.First(&ch, id).Error
+	err := Repo.DB.First(&ch, id).Error
 	return &ch, err
 }
 
 // ListBySource 根据告警源ID获取通道列表
 func (r *alertChannelRepo) ListBySource(sourceID uint) ([]model.AlertChannel, error) {
 	var list []model.AlertChannel
-	err := r.db.Where("source_id = ?", sourceID).Order("id DESC").Find(&list).Error
+	err := Repo.DB.Where("source_id = ?", sourceID).Order("id DESC").Find(&list).Error
 	return list, err
 }
 
@@ -288,12 +284,12 @@ func (r *alertChannelRepo) Update(ch *model.AlertChannel) error {
 	if ch.Secret != "" {
 		updates["secret"] = ch.Secret
 	}
-	return r.db.Model(&model.AlertChannel{}).Where("id = ?", ch.ID).Updates(updates).Error
+	return Repo.DB.Model(&model.AlertChannel{}).Where("id = ?", ch.ID).Updates(updates).Error
 }
 
 // Delete 删除通道
 func (r *alertChannelRepo) Delete(id uint) error {
-	return r.db.Delete(&model.AlertChannel{}, id).Error
+	return Repo.DB.Delete(&model.AlertChannel{}, id).Error
 }
 
 // ============================================
@@ -307,28 +303,27 @@ type AlertRecordRepo interface {
 }
 
 type alertRecordRepo struct {
-	db *gorm.DB
 }
 
 func NewAlertRecordRepo() AlertRecordRepo {
-	return &alertRecordRepo{db: dbRepo.DB}
+	return &alertRecordRepo{}
 }
 
 // Create 创建告警记录
 func (r *alertRecordRepo) Create(record *model.AlertRecord) error {
-	return r.db.Create(record).Error
+	return Repo.DB.Create(record).Error
 }
 
 // GetByID 根据ID获取告警记录
 func (r *alertRecordRepo) GetByID(id uint) (*model.AlertRecord, error) {
 	var record model.AlertRecord
-	err := r.db.First(&record, id).Error
+	err := Repo.DB.First(&record, id).Error
 	return &record, err
 }
 
 // Update 更新告警记录（仅更新发送相关字段，避免零值被跳过）
 func (r *alertRecordRepo) Update(record *model.AlertRecord) error {
-	return r.db.Model(&model.AlertRecord{}).Where("id = ?", record.ID).Updates(map[string]interface{}{
+	return Repo.DB.Model(&model.AlertRecord{}).Where("id = ?", record.ID).Updates(map[string]interface{}{
 		"send_status":       record.SendStatus,
 		"send_error":        record.SendError,
 		"formatted_message": record.FormattedMessage,
@@ -341,7 +336,7 @@ func (r *alertRecordRepo) Update(record *model.AlertRecord) error {
 func (r *alertRecordRepo) List(sourceID uint, page, pageSize int, status string) ([]model.AlertRecord, int64, error) {
 	var list []model.AlertRecord
 	var total int64
-	query := r.db.Model(&model.AlertRecord{})
+	query := Repo.DB.Model(&model.AlertRecord{})
 	if sourceID > 0 {
 		query = query.Where("source_id = ?", sourceID)
 	}
@@ -364,22 +359,21 @@ type SuppressedAlertRepo interface {
 }
 
 type suppressedAlertRepo struct {
-	db *gorm.DB
 }
 
 func NewSuppressedAlertRepo() SuppressedAlertRepo {
-	return &suppressedAlertRepo{db: dbRepo.DB}
+	return &suppressedAlertRepo{}
 }
 
 // Create 创建抑制告警记录
 func (r *suppressedAlertRepo) Create(sa *model.SuppressedAlert) error {
-	return r.db.Create(sa).Error
+	return Repo.DB.Create(sa).Error
 }
 
 // GetPending 获取待发送的抑制告警列表
 func (r *suppressedAlertRepo) GetPending() ([]model.SuppressedAlert, error) {
 	var list []model.SuppressedAlert
-	err := r.db.Where("status = ?", "pending").
+	err := Repo.DB.Where("status = ?", "pending").
 		Order("id ASC").Find(&list).Error
 	return list, err
 }
@@ -387,11 +381,11 @@ func (r *suppressedAlertRepo) GetPending() ([]model.SuppressedAlert, error) {
 // GetByID 根据ID获取抑制告警
 func (r *suppressedAlertRepo) GetByID(id uint) (*model.SuppressedAlert, error) {
 	var sa model.SuppressedAlert
-	err := r.db.First(&sa, id).Error
+	err := Repo.DB.First(&sa, id).Error
 	return &sa, err
 }
 
 // UpdateStatus 更新抑制告警状态
 func (r *suppressedAlertRepo) UpdateStatus(id uint, status string) error {
-	return r.db.Model(&model.SuppressedAlert{}).Where("id = ?", id).Update("status", status).Error
+	return Repo.DB.Model(&model.SuppressedAlert{}).Where("id = ?", id).Update("status", status).Error
 }

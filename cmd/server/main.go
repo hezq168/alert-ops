@@ -1,10 +1,8 @@
 package main
 
 import (
-	"alert-ops/internal/alert/service"
 	"alert-ops/internal/api"
 	"alert-ops/internal/config"
-	"alert-ops/internal/model"
 	"alert-ops/internal/repo"
 	"alert-ops/internal/scheduler"
 	logger "alert-ops/pkg"
@@ -30,6 +28,7 @@ import (
 // @name Authorization
 func main() {
 	var configFile string
+	// 使用命令行参数指定配置文件
 	if len(os.Args) < 2 {
 		configFile = "./conf/config.yaml"
 	} else {
@@ -61,39 +60,10 @@ func main() {
 	// 初始化默认数据
 	repo.InitDefaultData()
 
-	// 初始化 AI 分析服务（先用配置文件默认值）
-	aiCfg := config.Conf.AlertConfig.AI
-	ais := service.NewAIService(aiCfg.Provider, aiCfg.APIKey, aiCfg.BaseURL, aiCfg.Model)
-	zap.L().Info("AI服务初始化成功（配置文件默认值）",
-		zap.String("provider", aiCfg.Provider),
-		zap.String("model", aiCfg.Model),
-	)
+	// 启动抑制告警定时发送任务（不依赖 engineSvc，直接操作 DB）
+	scheduler.StartSuppressedSender()
 
-	// 尝试从数据库加载用户配置覆盖
-	var dbAICfg model.AIConfig
-	if err := repo.DB.First(&dbAICfg).Error; err == nil {
-		// 数据库有配置，用数据库的覆盖
-		if dbAICfg.Provider != "" && dbAICfg.APIKey != "" {
-			dbProvider := service.CreateProvider(dbAICfg.Provider, dbAICfg.APIKey, dbAICfg.BaseURL, dbAICfg.Model)
-			if dbProvider != nil {
-				ais.SetProvider(dbProvider)
-				zap.L().Info("AI服务已从数据库加载用户配置",
-					zap.String("provider", dbAICfg.Provider),
-					zap.String("model", dbAICfg.Model),
-				)
-			}
-		}
-	} else {
-		zap.L().Info("数据库无AI配置，使用配置文件默认值")
-	}
-
-	// 初始化规则引擎服务
-	engineSvc := service.NewEngineService(ais)
-
-	// 启动抑制告警定时发送任务
-	scheduler.StartSuppressedSender(engineSvc)
-
-	router := api.SetupRouter(ais)
+	router := api.SetupRouter()
 
 	// Swagger 路由
 	if config.Conf.Mode == "dev" {

@@ -11,13 +11,11 @@ import (
 
 type RecordHandler struct {
 	engineSvc service.EngineService
-	aiService service.AIService
 }
 
-func NewRecordHandler(engineSvc service.EngineService, aiSvc service.AIService) *RecordHandler {
+func NewRecordHandler(engineSvc service.EngineService) *RecordHandler {
 	return &RecordHandler{
 		engineSvc: engineSvc,
-		aiService: aiSvc,
 	}
 }
 
@@ -82,12 +80,6 @@ func (h *RecordHandler) ListRecords(c *gin.Context) {
 // @Success 200 {object} response.Response
 // @Router /api/v1/alert-records/:id/analyze [post]
 func (h *RecordHandler) AnalyzeRecord(c *gin.Context) {
-	if h.aiService == nil {
-		zap.L().Error("AI分析请求失败：AI服务未初始化")
-		response.InternalServerError(c, "AI 服务未初始化")
-		return
-	}
-
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
@@ -117,8 +109,8 @@ func (h *RecordHandler) AnalyzeRecord(c *gin.Context) {
 		zap.String("severity", record.Severity),
 	)
 
-	// 调用 AI 分析
-	result, err := h.aiService.Analyze(record.Summary, record.Description, "")
+	// 调用 AI 分析（自动降级：数据库 → 配置文件）
+	result, err := service.AnalyzeWithFallback(record.AlertName, record.Severity, record.Instance, nil, record.Summary, record.Description, "")
 	if err != nil {
 		zap.L().Error("AI分析失败",
 			zap.Uint("record_id", record.ID),

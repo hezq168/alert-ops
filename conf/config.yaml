@@ -27,13 +27,3 @@ mysql:
 jwt:
   secret: "1234567890abvdefghijkopqkda"
   expire: 24
-
-alert:
-  ai:
-    provider: "openai"       # openai（兼容 OpenAI API 的提供商，如阿里百炼）/ codebuddy
-    api_key: ""              # AI API Key
-    base_url: ""  # 阿里百炼兼容 OpenAI 的地址
-    model: "" # 模型名称
-  work_time:
-    start: "09:00"
-    end: "18:00"

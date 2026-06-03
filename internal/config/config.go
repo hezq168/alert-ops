@@ -16,28 +16,7 @@ type AppConfig struct {
 	*LogConfig   `mapstructure:"log"`
 	*MysqlConfig `mapstructure:"mysql"`
 	//*RedisConfig `mapstructure:"redis"`
-	*JwtConfig   `mapstructure:"jwt"`
-	*AlertConfig `mapstructure:"alert"`
-}
-
-// AlertConfig 告警配置
-type AlertConfig struct {
-	AI       AIConfig       `mapstructure:"ai"`
-	WorkTime WorkTimeConfig `mapstructure:"work_time"`
-}
-
-// AIConfig AI 配置
-type AIConfig struct {
-	Provider string `mapstructure:"provider"`
-	APIKey   string `mapstructure:"api_key"`
-	BaseURL  string `mapstructure:"base_url"`
-	Model    string `mapstructure:"model"`
-}
-
-// WorkTimeConfig 工作时间配置
-type WorkTimeConfig struct {
-	Start string `mapstructure:"start"`
-	End   string `mapstructure:"end"`
+	*JwtConfig `mapstructure:"jwt"`
 }
 
 // AppInfo 应用基本信息配置

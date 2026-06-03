@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter(aiSvc service.AIService) *gin.Engine {
+func SetupRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(logger.GinLogger(), logger.GinRecovery(true))
 
@@ -34,7 +34,7 @@ func SetupRouter(aiSvc service.AIService) *gin.Engine {
 		// ======================
 		// 告警 Webhook 路由（公开，无需登录）
 		// ======================
-		engineSvc := service.NewEngineService(aiSvc)
+		engineSvc := service.NewEngineService()
 		wHandler := alertHandler.NewWebhookHandler(engineSvc)
 		webhook := v1.Group("/webhook")
 		{
@@ -154,14 +154,14 @@ func SetupRouter(aiSvc service.AIService) *gin.Engine {
 			// ======================
 			// 告警模块 - 流水查询
 			// ======================
-			recHandler := alertHandler.NewRecordHandler(engineSvc, aiSvc)
+			recHandler := alertHandler.NewRecordHandler(engineSvc)
 			protected.GET("/alert-records", recHandler.ListRecords)
 			protected.POST("/alert-records/:id/analyze", recHandler.AnalyzeRecord)
 
 			// ======================
 			// 告警模块 - AI 配置
 			// ======================
-			aiCfgHandler := alertHandler.NewAIConfigHandler(aiSvc)
+			aiCfgHandler := alertHandler.NewAIConfigHandler()
 			protected.GET("/ai-config", aiCfgHandler.GetConfig)
 			protected.PUT("/ai-config", aiCfgHandler.UpdateConfig)
 			protected.POST("/ai-config/test", aiCfgHandler.TestConnection)

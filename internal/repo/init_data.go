@@ -35,6 +35,7 @@ func InitDefaultData() {
 		Status:      1,
 	}
 
+	// 创建角色
 	DB.FirstOrCreate(&adminRole, model.Role{Code: "admin"})
 	DB.FirstOrCreate(&userRole, model.Role{Code: "user"})
 
