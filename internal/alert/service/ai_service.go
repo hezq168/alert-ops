@@ -1,6 +1,7 @@
 package service
 
 import (
+	"alert-ops/internal/config"
 	"alert-ops/internal/model"
 	"alert-ops/internal/repo"
 	"bytes"
@@ -8,17 +9,104 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
 )
 
 // ============================================
-// AI 分析：查数据库 → 有则调用，没有则直接报错
+// AI 分析：队列 + 降级
 // ============================================
 
-// AnalyzeWithFallback 调用 AI 分析告警
+var (
+	aiQueue     chan func()
+	aiMu        sync.Mutex
+	aiDegraded  bool
+	aiRecoverAt time.Time
+	aiInitOnce  sync.Once
+)
+
+// initAIQueue 懒初始化：第一次调用时启动 worker，避免 config.Conf 未加载就访问
+func initAIQueue() {
+	aiInitOnce.Do(func() {
+		n := config.Conf.MaxConcurrent
+		if n <= 0 {
+			n = 1
+		}
+		qs := config.Conf.QueueSize
+		if qs <= 0 {
+			qs = 100
+		}
+		aiQueue = make(chan func(), qs)
+
+		for i := 0; i < n; i++ {
+			go func() {
+				for fn := range aiQueue {
+					fn()
+				}
+			}()
+		}
+		zap.L().Info("AI队列初始化完成", zap.Int("workers", n), zap.Int("queue_size", qs))
+	})
+}
+
+// AnalyzeWithFallback 调用 AI 分析告警（通过队列）
 func AnalyzeWithFallback(alertName, severity, instance string, labels map[string]string, summary, description, customPrompt string) (string, error) {
+	// 懒初始化队列（保证 config 已加载）
+	initAIQueue()
+
+	// 降级检查
+	aiMu.Lock()
+	if aiDegraded {
+		if time.Now().Before(aiRecoverAt) {
+			aiMu.Unlock()
+			return "", fmt.Errorf("AI 服务已降级，%s 后重试", time.Until(aiRecoverAt).Round(time.Second))
+		}
+		// 冷却时间到了，尝试恢复
+		aiDegraded = false
+	}
+	aiMu.Unlock()
+
+	// 通过 channel 排队执行，队列满了就直接返回错误
+	resultCh := make(chan struct {
+		s string
+		e error
+	}, 1)
+
+	select {
+	case aiQueue <- func() {
+		s, e := callAI(alertName, severity, instance, labels, summary, description, customPrompt)
+		resultCh <- struct {
+			s string
+			e error
+		}{s, e}
+	}:
+		// 成功入队，等待结果
+		result := <-resultCh
+
+		// 失败了就降级
+		if result.e != nil {
+			aiMu.Lock()
+			aiDegraded = true
+			timeout := config.Conf.DegradeTimeout
+			if timeout <= 0 {
+				timeout = 60
+			}
+			aiRecoverAt = time.Now().Add(time.Duration(timeout) * time.Second)
+			aiMu.Unlock()
+			zap.L().Error("AI调用失败，进入降级", zap.Error(result.e))
+		}
+
+		return result.s, result.e
+	default:
+		// 队列满了，直接返回
+		return "", fmt.Errorf("AI 请求队列已满，请稍后重试")
+	}
+}
+
+// callAI 实际调用 AI
+func callAI(alertName, severity, instance string, labels map[string]string, summary, description, customPrompt string) (string, error) {
 	var cfg model.AIConfig
 	if err := repo.DB.First(&cfg).Error; err == nil && cfg.Provider != "" && cfg.APIKey != "" {
 		p := createProvider(cfg.Provider, cfg.APIKey, cfg.BaseURL, cfg.Model)
@@ -28,8 +116,7 @@ func AnalyzeWithFallback(alertName, severity, instance string, labels map[string
 		)
 		return p.Analyze(alertName, severity, instance, labels, summary, description, customPrompt)
 	}
-
-	zap.L().Error("AI分析失败：数据库未配置AI，请在管理页面配置 AI 参数")
+	zap.L().Error("AI未配置")
 	return "", fmt.Errorf("AI 未配置，请在管理页面配置 AI 参数")
 }
 
@@ -140,7 +227,7 @@ func (p *OpenAICompatibleProvider) Analyze(alertName, severity, instance string,
 	reqBody := map[string]interface{}{
 		"model": p.ModelName,
 		"messages": []map[string]string{
-			{"role": "system", "content": "你是一个专业的运维告警分析助手，请简洁分析告警原因并给出处理建议。"},
+			{"role": "system", "content": "你是一个资深 SRE 工程师，精通 Kubernetes、Linux 系统运维和故障排查。\n\n【任务】分析用户提供的告警信息，给出根因分析和可操作的解决建议。\n\n【约束】1. 用中文回复；2. 回答分两部分：根因分析、解决建议；3. 总共不超过 200 字；4. 建议要具体可操作，不要说废话。"},
 			{"role": "user", "content": prompt},
 		},
 		"max_tokens": 500,

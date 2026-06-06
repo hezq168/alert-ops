@@ -17,6 +17,14 @@ type AppConfig struct {
 	*MysqlConfig `mapstructure:"mysql"`
 	//*RedisConfig `mapstructure:"redis"`
 	*JwtConfig `mapstructure:"jwt"`
+	*AIConfig  `mapstructure:"ai"`
+}
+
+// AIConfig AI调用配置
+type AIConfig struct {
+	MaxConcurrent  int `mapstructure:"max_concurrent"`  // 最大并发数，默认1
+	DegradeTimeout int `mapstructure:"degrade_timeout"` // 降级冷却时间（秒），默认60
+	QueueSize      int `mapstructure:"queue_size"`      // 队列缓冲区大小，默认100
 }
 
 // AppInfo 应用基本信息配置

@@ -27,3 +27,8 @@ mysql:
 jwt:
   secret: "1234567890abvdefghijkopqkda"
   expire: 24
+
+ai:
+  max_concurrent: 1
+  degrade_timeout: 60
+  queue_size: 100
