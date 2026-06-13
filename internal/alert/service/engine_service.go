@@ -27,6 +27,16 @@ type EngineService interface {
 	// 记录查询
 	ListRecords(sourceID uint, page, pageSize int, status string) ([]model.AlertRecord, int64, error)
 	GetRecordByID(id uint) (*model.AlertRecord, error)
+	// 告警处理工作流
+	AckAlert(recordID uint, user string) error
+	UnackAlert(recordID uint) error
+	UpdateAlertNote(recordID uint, note string) error
+	// 告警统计
+	GetStatsSummary(sourceID uint, days int) (*model.AlertStatsSummary, error)
+	GetStatsDailyTrend(sourceID uint, days int, severity string) ([]model.DailyTrendItem, error)
+	GetStatsBySeverity(sourceID uint, days int) ([]model.StatItem, error)
+	GetStatsTopAlerts(sourceID uint, days int, limit int) ([]model.StatItem, error)
+	GetStatsBySendStatus(sourceID uint, days int) ([]model.StatItem, error)
 }
 
 type engineService struct {
@@ -36,6 +46,7 @@ type engineService struct {
 	channelRepo    alertRepo.AlertChannelRepo
 	recordRepo     alertRepo.AlertRecordRepo
 	suppressedRepo alertRepo.SuppressedAlertRepo
+	statsRepo      alertRepo.AlertStatsRepo
 	templateSvc    TemplateService
 	channelSvc     ChannelService
 }
@@ -48,6 +59,7 @@ func NewEngineService() EngineService {
 		channelRepo:    alertRepo.NewAlertChannelRepo(),
 		recordRepo:     alertRepo.NewAlertRecordRepo(),
 		suppressedRepo: alertRepo.NewSuppressedAlertRepo(),
+		statsRepo:      alertRepo.NewAlertStatsRepo(),
 		templateSvc:    NewTemplateService(),
 		channelSvc:     NewChannelService(),
 	}
@@ -592,7 +604,38 @@ func (s *engineService) ParseAlertmanagerBody(body io.Reader) (*adapter.AMWebhoo
 
 // ListRecords 分页查询告警记录列表
 func (s *engineService) ListRecords(sourceID uint, page, pageSize int, status string) ([]model.AlertRecord, int64, error) {
-	return s.recordRepo.List(sourceID, page, pageSize, status)
+	list, total, err := s.recordRepo.List(sourceID, page, pageSize, status)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 对 suppressed 状态的记录，批量查询 suppressed_alerts 表填充抑制原因到 send_error
+	var suppressedIDs []uint
+	for i := range list {
+		if list[i].SendStatus == "suppressed" {
+			suppressedIDs = append(suppressedIDs, list[i].ID)
+		}
+	}
+	if len(suppressedIDs) > 0 {
+		suppressedList, err := s.suppressedRepo.GetByRecordIDs(suppressedIDs)
+		if err != nil {
+			zap.L().Warn("查询抑制原因失败", zap.Error(err))
+		} else {
+			reasonMap := make(map[uint]string, len(suppressedList))
+			for _, sa := range suppressedList {
+				if sa.SuppressReason != "" {
+					reasonMap[sa.RecordID] = sa.SuppressReason
+				}
+			}
+			for i := range list {
+				if reason, ok := reasonMap[list[i].ID]; ok {
+					list[i].SendError = reason
+				}
+			}
+		}
+	}
+
+	return list, total, nil
 }
 
 // GetRecordByID 根据ID获取告警记录
@@ -627,4 +670,52 @@ func (s *engineService) renderForChannel(tpl *model.AlertTemplate, alert *adapte
 	}
 
 	return title, content
+}
+
+// ============================================
+// 告警统计
+// ============================================
+
+// GetStatsSummary 获取汇总数字卡片
+func (s *engineService) GetStatsSummary(sourceID uint, days int) (*model.AlertStatsSummary, error) {
+	return s.statsRepo.Summary(sourceID, days)
+}
+
+// GetStatsDailyTrend 近 N 天告警趋势
+func (s *engineService) GetStatsDailyTrend(sourceID uint, days int, severity string) ([]model.DailyTrendItem, error) {
+	return s.statsRepo.DailyTrend(sourceID, days, severity)
+}
+
+// GetStatsBySeverity 按告警级别统计
+func (s *engineService) GetStatsBySeverity(sourceID uint, days int) ([]model.StatItem, error) {
+	return s.statsRepo.BySeverity(sourceID, days)
+}
+
+// GetStatsTopAlerts Top N 告警名称
+func (s *engineService) GetStatsTopAlerts(sourceID uint, days int, limit int) ([]model.StatItem, error) {
+	return s.statsRepo.TopAlerts(sourceID, days, limit)
+}
+
+// GetStatsBySendStatus 按发送状态统计
+func (s *engineService) GetStatsBySendStatus(sourceID uint, days int) ([]model.StatItem, error) {
+	return s.statsRepo.BySendStatus(sourceID, days)
+}
+
+// ============================================
+// 告警处理工作流
+// ============================================
+
+// AckAlert 确认告警
+func (s *engineService) AckAlert(recordID uint, user string) error {
+	return s.recordRepo.Ack(recordID, user)
+}
+
+// UnackAlert 取消确认告警
+func (s *engineService) UnackAlert(recordID uint) error {
+	return s.recordRepo.Unack(recordID)
+}
+
+// UpdateAlertNote 更新处理备注
+func (s *engineService) UpdateAlertNote(recordID uint, note string) error {
+	return s.recordRepo.UpdateProcessNote(recordID, note)
 }

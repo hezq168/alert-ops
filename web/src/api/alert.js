@@ -103,6 +103,18 @@ export function getAlertRecords(params) {
   return request({ url: '/alert-records', method: 'get', params })
 }
 
+export function ackAlert(id, data) {
+  return request({ url: `/alert-records/${id}/ack`, method: 'post', data })
+}
+
+export function unackAlert(id) {
+  return request({ url: `/alert-records/${id}/unack`, method: 'post' })
+}
+
+export function updateAlertNote(id, data) {
+  return request({ url: `/alert-records/${id}/note`, method: 'post', data })
+}
+
 // ============================================
 // AI 配置
 // ============================================
@@ -116,4 +128,27 @@ export function updateAIConfig(data) {
 
 export function testAIConnection(data) {
   return request({ url: '/ai-config/test', method: 'post', data })
+}
+
+// ============================================
+// 告警统计 Dashboard
+// ============================================
+export function getStatsSummary(params) {
+  return request({ url: '/alert-records/stats/summary', method: 'get', params })
+}
+
+export function getStatsDailyTrend(params) {
+  return request({ url: '/alert-records/stats/daily-trend', method: 'get', params })
+}
+
+export function getStatsBySeverity(params) {
+  return request({ url: '/alert-records/stats/by-severity', method: 'get', params })
+}
+
+export function getStatsTopAlerts(params) {
+  return request({ url: '/alert-records/stats/top-alerts', method: 'get', params })
+}
+
+export function getStatsBySendStatus(params) {
+  return request({ url: '/alert-records/stats/by-status', method: 'get', params })
 }

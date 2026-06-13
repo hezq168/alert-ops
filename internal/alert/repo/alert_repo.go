@@ -4,6 +4,7 @@ import (
 	"alert-ops/internal/model"
 	Repo "alert-ops/internal/repo"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -300,6 +301,9 @@ type AlertRecordRepo interface {
 	GetByID(id uint) (*model.AlertRecord, error)
 	Update(record *model.AlertRecord) error
 	List(sourceID uint, page, pageSize int, status string) ([]model.AlertRecord, int64, error)
+	Ack(recordID uint, user string) error
+	Unack(recordID uint) error
+	UpdateProcessNote(recordID uint, note string) error
 }
 
 type alertRecordRepo struct {
@@ -348,6 +352,30 @@ func (r *alertRecordRepo) List(sourceID uint, page, pageSize int, status string)
 	return list, total, err
 }
 
+// Ack 确认告警记录
+func (r *alertRecordRepo) Ack(recordID uint, user string) error {
+	now := time.Now()
+	return Repo.DB.Model(&model.AlertRecord{}).Where("id = ?", recordID).Updates(map[string]interface{}{
+		"acknowledged":    true,
+		"acknowledged_by": user,
+		"acknowledged_at": &now,
+	}).Error
+}
+
+// Unack 取消确认告警记录
+func (r *alertRecordRepo) Unack(recordID uint) error {
+	return Repo.DB.Model(&model.AlertRecord{}).Where("id = ?", recordID).Updates(map[string]interface{}{
+		"acknowledged":    false,
+		"acknowledged_by": "",
+		"acknowledged_at": nil,
+	}).Error
+}
+
+// UpdateProcessNote 更新处理备注
+func (r *alertRecordRepo) UpdateProcessNote(recordID uint, note string) error {
+	return Repo.DB.Model(&model.AlertRecord{}).Where("id = ?", recordID).Update("process_note", note).Error
+}
+
 // ============================================
 // 抑制告警 Repo
 // ============================================
@@ -355,6 +383,7 @@ type SuppressedAlertRepo interface {
 	Create(sa *model.SuppressedAlert) error
 	GetPending() ([]model.SuppressedAlert, error)
 	GetByID(id uint) (*model.SuppressedAlert, error)
+	GetByRecordIDs(recordIDs []uint) ([]model.SuppressedAlert, error)
 	UpdateStatus(id uint, status string) error
 }
 
@@ -385,7 +414,177 @@ func (r *suppressedAlertRepo) GetByID(id uint) (*model.SuppressedAlert, error) {
 	return &sa, err
 }
 
+// GetByRecordIDs 根据告警记录ID批量查询抑制记录
+func (r *suppressedAlertRepo) GetByRecordIDs(recordIDs []uint) ([]model.SuppressedAlert, error) {
+	if len(recordIDs) == 0 {
+		return nil, nil
+	}
+	var list []model.SuppressedAlert
+	err := Repo.DB.Where("record_id IN ?", recordIDs).Find(&list).Error
+	return list, err
+}
+
 // UpdateStatus 更新抑制告警状态
 func (r *suppressedAlertRepo) UpdateStatus(id uint, status string) error {
 	return Repo.DB.Model(&model.SuppressedAlert{}).Where("id = ?", id).Update("status", status).Error
+}
+
+// ============================================
+// 统计 Repo
+// ============================================
+type AlertStatsRepo interface {
+	// Summary 获取汇总数字卡片数据
+	Summary(sourceID uint, days int) (*model.AlertStatsSummary, error)
+	// DailyTrend 近 N 天告警趋势
+	DailyTrend(sourceID uint, days int, severity string) ([]model.DailyTrendItem, error)
+	// BySeverity 按告警级别统计
+	BySeverity(sourceID uint, days int) ([]model.StatItem, error)
+	// TopAlerts Top N 告警名称
+	TopAlerts(sourceID uint, days int, limit int) ([]model.StatItem, error)
+	// BySendStatus 按发送状态统计
+	BySendStatus(sourceID uint, days int) ([]model.StatItem, error)
+}
+
+type alertStatsRepo struct{}
+
+func NewAlertStatsRepo() AlertStatsRepo {
+	return &alertStatsRepo{}
+}
+
+// Summary 获取汇总数字卡片数据
+func (r *alertStatsRepo) Summary(sourceID uint, days int) (*model.AlertStatsSummary, error) {
+	var s model.AlertStatsSummary
+	since := time.Now().AddDate(0, 0, -days)
+
+	baseQuery := Repo.DB.Model(&model.AlertRecord{}).Where("created_at >= ?", since)
+	if sourceID > 0 {
+		baseQuery = baseQuery.Where("source_id = ?", sourceID)
+	}
+
+	// 今日告警数（今天 0 点到现在）
+	todayStart := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), 0, 0, 0, 0, time.Now().Location())
+	todayQuery := Repo.DB.Model(&model.AlertRecord{}).Where("created_at >= ?", todayStart)
+	if sourceID > 0 {
+		todayQuery = todayQuery.Where("source_id = ?", sourceID)
+	}
+	todayQuery.Count(&s.TodayCount)
+
+	// 当前 firing 数
+	firingQuery := Repo.DB.Model(&model.AlertRecord{}).Where("status = ?", "firing")
+	if sourceID > 0 {
+		firingQuery = firingQuery.Where("source_id = ?", sourceID)
+	}
+	firingQuery.Count(&s.FiringCount)
+
+	// 发送失败数
+	failedQuery := baseQuery.Where("send_status = ?", "failed")
+	failedQuery.Count(&s.FailedCount)
+
+	// 被抑制告警数
+	suppressedQuery := Repo.DB.Model(&model.SuppressedAlert{}).Where("created_at >= ?", since)
+	if sourceID > 0 {
+		suppressedQuery = suppressedQuery.Where("source_id = ?", sourceID)
+	}
+	suppressedQuery.Count(&s.SuppressedCount)
+
+	return &s, nil
+}
+
+// DailyTrend 近 N 天告警趋势
+func (r *alertStatsRepo) DailyTrend(sourceID uint, days int, severity string) ([]model.DailyTrendItem, error) {
+	var results []model.DailyTrendItem
+	since := time.Now().AddDate(0, 0, -days)
+
+	query := Repo.DB.Model(&model.AlertRecord{}).
+		Select("DATE(created_at) as date, status, COUNT(*) as count").
+		Where("created_at >= ?", since)
+
+	if sourceID > 0 {
+		query = query.Where("source_id = ?", sourceID)
+	}
+	if severity != "" {
+		query = query.Where("severity = ?", severity)
+	}
+
+	query = query.Group("DATE(created_at), status").Order("date ASC")
+
+	type row struct {
+		Date   string
+		Status string
+		Count  int64
+	}
+	var rows []row
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	// 合并同一天的不同 status
+	dateMap := make(map[string]*model.DailyTrendItem)
+	for _, r := range rows {
+		if _, ok := dateMap[r.Date]; !ok {
+			dateMap[r.Date] = &model.DailyTrendItem{Date: r.Date}
+		}
+		item := dateMap[r.Date]
+		if r.Status == "firing" {
+			item.Firing = r.Count
+		} else if r.Status == "resolved" {
+			item.Resolved = r.Count
+		}
+	}
+	for _, v := range dateMap {
+		results = append(results, *v)
+	}
+
+	return results, nil
+}
+
+// BySeverity 按告警级别统计
+func (r *alertStatsRepo) BySeverity(sourceID uint, days int) ([]model.StatItem, error) {
+	var results []model.StatItem
+	since := time.Now().AddDate(0, 0, -days)
+
+	query := Repo.DB.Model(&model.AlertRecord{}).
+		Select("COALESCE(severity, 'unknown') as name, COUNT(*) as count").
+		Where("created_at >= ?", since)
+
+	if sourceID > 0 {
+		query = query.Where("source_id = ?", sourceID)
+	}
+
+	err := query.Group("severity").Order("count DESC").Find(&results).Error
+	return results, err
+}
+
+// TopAlerts Top N 告警名称
+func (r *alertStatsRepo) TopAlerts(sourceID uint, days int, limit int) ([]model.StatItem, error) {
+	var results []model.StatItem
+	since := time.Now().AddDate(0, 0, -days)
+
+	query := Repo.DB.Model(&model.AlertRecord{}).
+		Select("alert_name as name, COUNT(*) as count").
+		Where("created_at >= ?", since)
+
+	if sourceID > 0 {
+		query = query.Where("source_id = ?", sourceID)
+	}
+
+	err := query.Group("alert_name").Order("count DESC").Limit(limit).Find(&results).Error
+	return results, err
+}
+
+// BySendStatus 按发送状态统计
+func (r *alertStatsRepo) BySendStatus(sourceID uint, days int) ([]model.StatItem, error) {
+	var results []model.StatItem
+	since := time.Now().AddDate(0, 0, -days)
+
+	query := Repo.DB.Model(&model.AlertRecord{}).
+		Select("send_status as name, COUNT(*) as count").
+		Where("created_at >= ?", since)
+
+	if sourceID > 0 {
+		query = query.Where("source_id = ?", sourceID)
+	}
+
+	err := query.Group("send_status").Order("count DESC").Find(&results).Error
+	return results, err
 }

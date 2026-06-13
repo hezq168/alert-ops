@@ -70,6 +70,7 @@ alert-ops/
 │       ├── utils/              # 工具函数
 │       └── views/              # 页面组件
 │           ├── alert/          # 告警管理页面（6 个）
+│           ├── Dashboard.vue   # 统计仪表盘
 │           └── system/         # 系统管理页面（3 个）
 ├── go.mod                      # Go 模块定义
 └── README.md                   # 项目说明文档
@@ -188,21 +189,32 @@ alert-ops/
 - ✅ 告警记录全程追溯
 - ✅ 按状态/级别/时间范围筛选
 - ✅ 分页查询
+- ✅ 人工确认/取消确认（附带确认人、确认时间记录）
+- ✅ 处理备注填写
+- ✅ 确认状态前端过滤（已确认/待确认，排除已恢复记录）
 - ✅ 原始数据与格式化消息对照
+- ✅ AI 单条分析告警
 
-### 10. AI 辅助分析
+### 10. 统计 Dashboard
+- ✅ 告警统计汇总卡片（今日告警数、firing 数、失败数、抑制数）
+- ✅ 近 N 天告警趋势图（firing/resolved 每日分布）
+- ✅ 告警级别分布统计
+- ✅ Top N 告警名称排行
+- ✅ 发送状态分布统计
+
+### 11. AI 辅助分析
 - ✅ 支持 OpenAI 兼容 API（OpenAI / CodeBuddy 等）
 - ✅ AI 配置页面化管理，支持热切换（无需重启）
 - ✅ 连接测试功能（一键验证配置可用性）
 - ✅ AI 分析告警严重程度与根因
 - ✅ AI 建议嵌入发送消息
 
-### 11. 告警抑制
+### 12. 告警抑制
 - ✅ 非工作时间告警自动抑制
 - ✅ 定时任务（每 5 分钟）检查并发送
 - ✅ 工作时间按规则配置（每条规则独立设置 `work_time_start` / `work_time_end`）
 
-### 12. 系统功能
+### 13. 系统功能
 - ✅ 图片验证码（自实现）
 - ✅ 配置热加载（Viper + fsnotify）
 - ✅ 跨域支持（CORS）
@@ -453,6 +465,7 @@ jwt:
 | GET | `/api/v1/alert-channels/:id` | 通道详情 |
 | PUT | `/api/v1/alert-channels/:id` | 更新通道 |
 | DELETE | `/api/v1/alert-channels/:id` | 删除通道 |
+| POST | `/api/v1/alert-channels/:id/test` | 测试通道发送 |
 
 ### 告警流水（需要认证 + 权限）
 
@@ -460,6 +473,19 @@ jwt:
 |------|------|------|
 | GET | `/api/v1/alert-records` | 告警流水列表（分页+筛选） |
 | POST | `/api/v1/alert-records/:id/analyze` | AI 分析单条告警记录 |
+| POST | `/api/v1/alert-records/:id/ack` | 确认告警 |
+| POST | `/api/v1/alert-records/:id/unack` | 取消确认 |
+| POST | `/api/v1/alert-records/:id/note` | 更新处理备注 |
+
+### 告警统计 Dashboard（需要认证 + 权限）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/alert-records/stats/summary` | 统计汇总（今日告警数、firing数等） |
+| GET | `/api/v1/alert-records/stats/daily-trend` | 近 N 天告警趋势 |
+| GET | `/api/v1/alert-records/stats/by-severity` | 告警级别分布 |
+| GET | `/api/v1/alert-records/stats/top-alerts` | Top N 告警名称排行 |
+| GET | `/api/v1/alert-records/stats/by-status` | 发送状态分布 |
 
 ### AI 配置（需要认证 + 权限）
 

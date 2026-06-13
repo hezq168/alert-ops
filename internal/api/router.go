@@ -157,6 +157,18 @@ func SetupRouter() *gin.Engine {
 			recHandler := alertHandler.NewRecordHandler(engineSvc)
 			protected.GET("/alert-records", recHandler.ListRecords)
 			protected.POST("/alert-records/:id/analyze", recHandler.AnalyzeRecord)
+			protected.POST("/alert-records/:id/ack", recHandler.AckAlert)
+			protected.POST("/alert-records/:id/unack", recHandler.UnackAlert)
+			protected.POST("/alert-records/:id/note", recHandler.UpdateAlertNote)
+
+			// ======================
+			// 告警模块 - 统计 Dashboard
+			// ======================
+			protected.GET("/alert-records/stats/summary", recHandler.GetStatsSummary)
+			protected.GET("/alert-records/stats/daily-trend", recHandler.GetStatsDailyTrend)
+			protected.GET("/alert-records/stats/by-severity", recHandler.GetStatsBySeverity)
+			protected.GET("/alert-records/stats/top-alerts", recHandler.GetStatsTopAlerts)
+			protected.GET("/alert-records/stats/by-status", recHandler.GetStatsBySendStatus)
 
 			// ======================
 			// 告警模块 - AI 配置

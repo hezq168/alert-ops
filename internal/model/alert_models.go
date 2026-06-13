@@ -132,6 +132,10 @@ type AlertRecord struct {
 	SendStatus       string     `json:"send_status" gorm:"type:varchar(20);default:'pending';comment:'发送状态: pending/sent/failed/suppressed'"`
 	SendError        string     `json:"send_error" gorm:"type:text;comment:'发送失败原因'"`
 	SentAt           *time.Time `json:"sent_at" gorm:"comment:'发送时间'"`
+	Acknowledged     bool       `json:"acknowledged" gorm:"default:false;comment:'是否已确认'"`
+	AcknowledgedBy   string     `json:"acknowledged_by" gorm:"type:varchar(100);comment:'确认人'"`
+	AcknowledgedAt   *time.Time `json:"acknowledged_at" gorm:"comment:'确认时间'"`
+	ProcessNote      string     `json:"process_note" gorm:"type:text;comment:'处理备注'"`
 	CreatedAt        time.Time  `json:"created_at" gorm:"comment:'创建时间'"`
 }
 
@@ -148,4 +152,29 @@ type SuppressedAlert struct {
 	Status          string     `json:"status" gorm:"type:varchar(20);default:'pending';comment:'状态: pending/sent/cancelled'"`
 	CreatedAt       time.Time  `json:"created_at" gorm:"comment:'创建时间'"`
 	UpdatedAt       time.Time  `json:"updated_at" gorm:"comment:'更新时间'"`
+}
+
+// ============================================
+// 告警统计（仅用于 API 返回，不存数据库）
+// ============================================
+
+// AlertStatsSummary 汇总数字卡片
+type AlertStatsSummary struct {
+	TodayCount      int64 `json:"today_count"`      // 今日告警数
+	FiringCount     int64 `json:"firing_count"`     // 当前 firing 数
+	FailedCount     int64 `json:"failed_count"`     // 发送失败数
+	SuppressedCount int64 `json:"suppressed_count"` // 被抑制告警数
+}
+
+// DailyTrendItem 每日趋势
+type DailyTrendItem struct {
+	Date     string `json:"date"`
+	Firing   int64  `json:"firing"`
+	Resolved int64  `json:"resolved"`
+}
+
+// StatItem 通用统计项（名称+数量）
+type StatItem struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
 }
